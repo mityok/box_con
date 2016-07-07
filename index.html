@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>BOX oauth2</title>
+	<meta charset="utf-8">
+	<style>
+		body, html {
+			margin: 0;
+			padding: 0;
+		}
+		body {
+			overflow:hidden;
+		}
+	</style>
+</head>
+<body>
+	<form id="file-form" action="handler.php" method="POST">
+		<input type="file" id="file-select" name="photos[]" multiple/>
+		<button type="submit" id="upload-button">Upload</button>
+	</form>
+	<button onclick="getData()">Get</button>
+	<button onclick="refreshToken()">Refresh</button>
+	<button onclick="uploadCustom()">upload generated</button>
+	<script>
+	/*
+	https://account.box.com/api/oauth2/authorize?response_type=code&client_id=k04ji5mea1pxil13hl5av0m66a2t6nmv&state=security_token&redirect_uri=http://localhost:9090/listener
+	*/
+	//https://gist.github.com/seanrose/5570650
+	//https://docs.box.com/docs/get-started-with-the-box-api
+	var form = document.getElementById('file-form');
+	var fileSelect = document.getElementById('file-select');
+	var uploadButton = document.getElementById('upload-button');
+	var token = null;
+	var response = null;
+	var refresh_token = null;
+	var folder = 0;
+	var dataFileId = 0;
+
+	function getQueryVariable(variable) {
+		var query = window.location.search.substring(1);
+		var vars = query.split('&');
+		for (var i = 0; i < vars.length; i++) {
+			var pair = vars[i].split('=');
+			if (decodeURIComponent(pair[0]) == variable) {
+				return decodeURIComponent(pair[1]);
+			}
+		}
+		console.log('Query variable %s not found', variable);
+	}
+
+	function getData() {
+		var oReq = new XMLHttpRequest();
+		oReq.addEventListener("load", function(e) {
+			console.log(e.target.response);
+			var ent = JSON.parse(e.target.response).entries;
+			if (folder !== 0) {
+				for (var i = 0; i < ent.length; i++) {
+					if (ent[i].type == 'file' && ent[i].name == 'data.txt') {
+						dataFileId = ent[i].id;
+						return getFile(ent[i].id);
+					}
+				}
+			}
+			for (var i = 0; i < ent.length; i++) {
+				if (ent[i].type == 'folder' && ent[i].name == 'data') {
+					folder = ent[i].id;
+					return getData();
+				}
+			}
+		});
+		oReq.open("GET", "https://api.box.com/2.0/folders/" + folder + "/items");
+		oReq.setRequestHeader("Authorization", "Bearer " + token);
+		oReq.send();
+	}
+
+	function getFile(FILE_ID) {
+		var oReq = new XMLHttpRequest();
+		oReq.onload = function() {
+			if (oReq.status === 200) {
+				console.log(oReq.response);
+			} else {
+				alert('An error occurred!');
+			}
+		};
+
+		oReq.open("GET", "curl.php?id=" + FILE_ID + "&token=" + token);
+
+		oReq.setRequestHeader("Access-Control-Allow-Origin", "*");
+		oReq.setRequestHeader("Access-Control-Allow-Credentials", "true");
+		oReq.setRequestHeader("Access-Control-Allow-Methods", "GET");
+		oReq.send();
+	}
+	/*
+	refresh token
+	Each refresh_token is valid for one use in 60 days.
+	curl https://api.box.com/oauth2/token \ -d 'grant_type=refresh_token&refresh_token={valid refresh token}&client_id={your_client_id}&client_secret={your_client_secret}' \ -X POST
+	*/
+	function refreshToken() {
+		var xhr = new XMLHttpRequest();
+		xhr.open('POST', 'https://api.box.com/oauth2/token', true);
+
+		xhr.onload = function() {
+
+			if (xhr.status === 200) {
+				// File(s) uploaded.
+				response = JSON.parse(xhr.response);
+				token = response.access_token;
+				refresh_token = response.refresh_token;
+				console.log('refreshToken', response);
+			} else {
+				alert('An error occurred!');
+			}
+		};
+		var form = new FormData();
+		form.append('grant_type', 'refresh_token');
+		form.append('refresh_token', refresh_token);
+		form.append('client_id', 'k04ji5mea1pxil13hl5av0m66a2t6nmv');
+		form.append('client_secret', 'YZTdlVdQNarhpGh2iVKWowCa9PKJtH18');
+		xhr.send(form);
+
+	}
+
+	function getToken() {
+		var xhr = new XMLHttpRequest();
+		xhr.open('POST', 'https://api.box.com/oauth2/token', true);
+		xhr.onload = function() {
+			if (xhr.status === 200) {
+				// File(s) uploaded.
+				response = JSON.parse(xhr.response);
+				token = response.access_token;
+				refresh_token = response.refresh_token;
+				console.log(response);
+				uploadButton.innerHTML = 'Upload';
+			} else {
+				alert('An error occurred!');
+			}
+		};
+		var form = new FormData();
+		form.append('grant_type', 'authorization_code');
+		form.append('code', getQueryVariable('code'));
+		form.append('client_id', 'k04ji5mea1pxil13hl5av0m66a2t6nmv');
+		form.append('client_secret', 'YZTdlVdQNarhpGh2iVKWowCa9PKJtH18');
+		xhr.send(form);
+	}
+	//
+	getToken();
+
+	form.onsubmit = function(event) {
+		event.preventDefault();
+		// Update button text.
+		uploadButton.innerHTML = 'Uploading...';
+		var files = fileSelect.files;
+		var formData = new FormData();
+		// Loop through each of the selected files.
+		for (var i = 0; i < files.length; i++) {
+			var file = files[i];
+			// Check the file type.
+			if (!file.type.match('image.*')) {
+				continue;
+			}
+			// Add the file to the request.
+			formData.append('photos[]', file, file.name);
+		}
+		formData.append('parent_id', folder);
+		//1368269779
+		var xhr = new XMLHttpRequest();
+		xhr.open('POST', 'https://upload.box.com/api/2.0/files/content', true);
+
+		xhr.onload = function() {
+			if (xhr.status === 200) {
+				// File(s) uploaded.
+				uploadButton.innerHTML = 'Upload';
+			} else {
+				alert('An error occurred!');
+			}
+		};
+		//xhr.setRequestHeader("Authorization", "Bearer SAU36zkbBJXcjnm9svO86cqAVC4g4Frm");
+		xhr.setRequestHeader("Authorization", "Bearer " + token);
+		xhr.send(formData);
+		// The rest of the code will go here...
+	}
+
+	function uploadCustom() {
+		var formData = new FormData();
+		var w = '';
+		for (var i = 0; i < 100000; i++) {
+			w += 'a';
+		}
+		var debug = {
+			hello: w
+		};
+		var blob = new Blob([JSON.stringify(debug, null, 2)], {
+			type: 'text/plain'
+		});
+		formData.append("data", blob, 'data.txt');
+		formData.append('parent_id', folder);
+
+		var xhr = new XMLHttpRequest();
+		xhr.open('POST', 'https://upload.box.com/api/2.0/files/' + dataFileId + '/content', true);
+
+		xhr.onload = function() {
+			if (xhr.status === 200 || xhr.status === 201) {
+				// File(s) uploaded.
+				alert('Upload');
+			} else {
+				alert('An error occurred!');
+			}
+		};
+		xhr.upload.addEventListener("progress", function(evt) {
+			if (evt.lengthComputable) {
+				var percentComplete = evt.loaded / evt.total;
+				percentComplete = parseInt(percentComplete * 100);
+				console.log(percentComplete);
+
+				if (percentComplete === 100) {
+
+				}
+			} else {
+				console.log('not compute');
+			}
+		});
+		xhr.setRequestHeader("Authorization", "Bearer " + token);
+		xhr.send(formData);
+	}
+
+	/*
+			curl https://upload.box.com/api/2.0/files/content \
+	 -H "Authorization: Bearer ACCESS_TOKEN" -X POST \
+	 -F attributes='{"name":"tigers.jpeg", "parent":{"id":"11446498"}}' \
+	 -F file=@myfile.jpeg
+	 */
+	</script>
+</body>
+</html>
